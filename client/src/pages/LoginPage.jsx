@@ -21,8 +21,8 @@ const LoginPage = () => {
         return;
       }
 
-      login(currState==="sign Up" ? 'signup':'login' ,{
-        fullName,email,password,bio
+      login(currState === "Sign Up" ? 'signup' : 'login', {
+        fullName, email, password, bio
       })
     }
 
@@ -61,9 +61,13 @@ const LoginPage = () => {
             )}
             {
               currState === "Sign Up" && isDataSubmitted && (
-                <textarea onChange={(e)=>setBio(e.target.value)} rows={4} className='p-2 border
-                 border-gray-500 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500' 
-                 placeholder='Provide a short bio...'> </textarea>
+                <textarea
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                  rows={4}
+                  className='p-2 border border-gray-500 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500'
+                  placeholder='Provide a short bio...'
+                />
               )
             }
             <button type='submit' className='py-3 bg-gradient-to-r from-purple-400 to-violet-600
