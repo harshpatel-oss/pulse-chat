@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * THEME STRATEGY (rewritten):
+ * Light mode is the unmarked default for every semantic token below.
+ * Dark mode is applied only when `html.dark` is present, which
+ * ThemeContext.jsx toggles. This matches Tailwind's `darkMode: "class"`
+ * setting exactly, so any future use of Tailwind's own `dark:` utility
+ * prefix will also work correctly without further changes.
+ *
+ * Colors are exposed as CSS variables and consumed by tailwind.config.js
+ * (bg-base, bg-surface, bg-elevated, border-border, text-ink, text-ink-dim).
+ * This means every component that already uses those semantic class names
+ * gets correct light/dark colors automatically — no per-component dark:
+ * variants needed.
+ */
+
+:root {
+  color-scheme: light;
+  --color-base: #fafaf9;
+  --color-surface: #ffffff;
+  --color-elevated: #f3f4f6;
+  --color-border: #e8e9ec;
+  --color-ink: #16181c;
+  --color-ink-dim: #6b7280;
+}
+
+html.dark {
+  color-scheme: dark;
+  --color-base: #0b0f14;
+  --color-surface: #121821;
+  --color-elevated: #1c2530;
+  --color-border: #232e3b;
+  --color-ink: #f2f4f7;
+  --color-ink-dim: #9aa5b1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-base text-ink font-body antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Scrollbars */
+.scroll-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(154, 165, 177, 0.25);
+  border-radius: 999px;
+}
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(154, 165, 177, 0.4);
+}
+
+/* Visible keyboard focus, always */
+:focus-visible {
+  outline: 2px solid #5b8cff;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Reduced motion respected globally */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+html.dark .glass {
+  background: rgba(18, 24, 33, 0.6);
+}
+
+.glass-strong {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+}
+
+html.dark .glass-strong {
+  background: rgba(28, 37, 48, 0.78);
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.03) 25%,
+    rgba(0, 0, 0, 0.07) 37%,
+    rgba(0, 0, 0, 0.03) 63%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s infinite linear;
+}
+
+html.dark .skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.09) 37%,
+    rgba(255, 255, 255, 0.04) 63%
+  );
+  background-size: 800px 100%;
+}
