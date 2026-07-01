@@ -1,5 +1,6 @@
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
+import Group from "../models/group.model.js";
 import cloudinary from "../lib/cloudinary.js";
 import { io, userSocketMap } from "../lib/socket.js";
 import { successResponse, errorResponse } from "../utils/response.js";
@@ -29,7 +30,7 @@ export const getUsersForSidebar = async (req, res) => {
   }
 };
 
-export const getMessages = async (req, res) => {
+ export const getMessages = async (req, res) => {
   try {
     const { id: selectedUserId } = req.params;
     const myId = req.user._id;
@@ -37,18 +38,74 @@ export const getMessages = async (req, res) => {
     const limit = Number(req.query.limit || 40);
     const skip = (page - 1) * limit;
 
-    const messages = await Message.find({
+    let messages = await Message.find({
       $or: [
         { senderId: myId, receiverId: selectedUserId },
         { senderId: selectedUserId, receiverId: myId },
       ],
+      groupId: { $exists: false },
+    })
+      .sort({ createdAt: -1 }) // newest first
+      .skip(skip)
+      .limit(limit)
+      .populate("senderId", "fullName profilePic")
+      .lean();
+
+    // Display oldest -> newest within these latest 40
+    messages.reverse();
+
+    await Message.updateMany(
+      {
+        senderId: selectedUserId,
+        receiverId: myId,
+        seenBy: { $ne: myId },
+      },
+      {
+        $addToSet: {
+          seenBy: myId,
+          deliveredTo: myId,
+        },
+      }
+    );
+
+    return successResponse(res, { messages });
+  } catch (error) {
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+export const getGroupMessages = async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const myId = req.user._id;
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 40);
+    const skip = (page - 1) * limit;
+
+    // Check if user is a member of the group
+    const group = await Group.findById(groupId);
+    if (!group) return errorResponse(res, "Group not found", 404);
+    if (!group.members.some((id) => id.equals(myId))) {
+      return errorResponse(res, "You are not a member of this group", 403);
+    }
+
+    // Fetch group messages with pagination
+    const messages = await Message.find({
+      groupId: groupId,
+      deletedForEveryone: { $ne: true },
     })
       .sort({ createdAt: 1 })
       .skip(skip)
       .limit(limit)
+      .populate("senderId", "fullName profilePic")
+      .populate("replyTo", "text senderId media")
       .lean();
 
-    await Message.updateMany({ senderId: selectedUserId, receiverId: myId, seenBy: { $ne: myId } }, { $addToSet: { seenBy: myId, deliveredTo: myId } });
+    // Mark messages as seen
+    await Message.updateMany(
+      { groupId: groupId, seenBy: { $ne: myId } },
+      { $addToSet: { seenBy: myId, deliveredTo: myId } }
+    );
 
     return successResponse(res, { messages });
   } catch (error) {
@@ -89,7 +146,19 @@ export const sendMessage = async (req, res) => {
     };
 
     if (groupId) {
+      // Verify user is a member of the group
+      const group = await Group.findById(groupId);
+      if (!group) return errorResponse(res, "Group not found", 404);
+      if (!group.members.some((id) => id.equals(senderId))) {
+        return errorResponse(res, "You are not a member of this group", 403);
+      }
+      // Check if only admins can message
+      if (group.onlyAdminsCanMessage && !group.admins.some((id) => id.equals(senderId))) {
+        return errorResponse(res, "Only admins can send messages in this group", 403);
+      }
+
       messagePayload.groupId = groupId;
+      messagePayload.deliveredTo = group.members;
     } else {
       messagePayload.receiverId = selectedUserId;
     }
@@ -98,10 +167,12 @@ export const sendMessage = async (req, res) => {
     await newMessage.populate("senderId", "fullName profilePic");
 
     if (groupId) {
-      io.emit("groupMessage", newMessage);
+      // Emit to group room
+      io.to(groupId).emit("groupMessage", newMessage);
     } else {
-      const receiverSocketId = userSocketMap[selectedUserId];
-      if (receiverSocketId) io.to(receiverSocketId).emit("newMessage", newMessage);
+      // Emit to direct message room
+      const directRoomId = `direct_${[senderId.toString(), selectedUserId.toString()].sort().join("_")}`;
+      io.to(directRoomId).emit("newMessage", newMessage);
     }
 
     return successResponse(res, { newMessage });
@@ -114,9 +185,22 @@ export const editMessage = async (req, res) => {
   try {
     const { id } = req.params;
     const { text } = req.body;
-    const message = await Message.findOneAndUpdate({ _id: id, senderId: req.user._id }, { text, edited: true }, { new: true });
+    const message = await Message.findOneAndUpdate(
+      { _id: id, senderId: req.user._id },
+      { text, edited: true },
+      { new: true }
+    ).populate("senderId", "fullName profilePic");
+
     if (!message) return errorResponse(res, "Message not found or unauthorized", 404);
-    io.emit("messageUpdated", message);
+
+    if (message.groupId) {
+      io.to(message.groupId.toString()).emit("messageUpdated", message);
+    } else {
+      // For direct messages, use room ID
+      const directRoomId = `direct_${[req.user._id.toString(), message.receiverId.toString()].sort().join("_")}`;
+      io.to(directRoomId).emit("messageUpdated", message);
+    }
+
     return successResponse(res, { message });
   } catch (error) {
     return errorResponse(res, error.message, 500);
@@ -133,15 +217,26 @@ export const deleteMessage = async (req, res) => {
     if (!message.senderId.equals(req.user._id)) return errorResponse(res, "Unauthorized", 403);
 
     if (forEveryone) {
+      // Mark as deleted for everyone
       message.deletedForEveryone = true;
       await message.save();
-      io.emit("messageDeleted", { messageId: id });
-      return successResponse(res, { message: "Deleted for everyone" });
-    }
 
-    await message.remove();
-    io.emit("messageDeleted", { messageId: id });
-    return successResponse(res, { message: "Deleted" });
+      if (message.groupId) {
+        io.to(message.groupId.toString()).emit("messageDeleted", { messageId: id });
+      } else {
+        const receiverSockets = userSocketMap[message.receiverId];
+        if (receiverSockets) {
+          receiverSockets.forEach((socketId) => {
+            io.to(socketId).emit("messageDeleted", { messageId: id });
+          });
+        }
+      }
+      return successResponse(res, { message: "Deleted for everyone" });
+    } else {
+      // Soft delete - just for this user (in future can use deletedBy array)
+      await Message.deleteOne({ _id: id });
+      return successResponse(res, { message: "Deleted" });
+    }
   } catch (error) {
     return errorResponse(res, error.message, 500);
   }
@@ -161,7 +256,21 @@ export const reactToMessage = async (req, res) => {
       message.reactions.push({ userId: req.user._id, reaction });
     }
     await message.save();
-    io.emit("messageReaction", { messageId: id, reactions: message.reactions });
+
+    if (message.groupId) {
+      io.to(message.groupId.toString()).emit("messageReaction", {
+        messageId: id,
+        reactions: message.reactions,
+      });
+    } else {
+      // For direct messages, use room ID
+      const directRoomId = `direct_${[req.user._id.toString(), message.receiverId.toString()].sort().join("_")}`;
+      io.to(directRoomId).emit("messageReaction", {
+        messageId: id,
+        reactions: message.reactions,
+      });
+    }
+
     return successResponse(res, { message });
   } catch (error) {
     return errorResponse(res, error.message, 500);
@@ -171,8 +280,67 @@ export const reactToMessage = async (req, res) => {
 export const pinMessage = async (req, res) => {
   try {
     const { id } = req.params;
-    const message = await Message.findByIdAndUpdate(id, { pinned: true }, { new: true });
+    const message = await Message.findById(id);
     if (!message) return errorResponse(res, "Message not found", 404);
+
+    // Only the sender or group admin can pin
+    if (message.senderId.toString() !== req.user._id.toString()) {
+      if (message.groupId) {
+        const group = await Group.findById(message.groupId);
+        if (!group || !group.admins.some((id) => id.equals(req.user._id))) {
+          return errorResponse(res, "Unauthorized", 403);
+        }
+      } else {
+        return errorResponse(res, "Unauthorized", 403);
+      }
+    }
+
+    message.pinned = true;
+    await message.save();
+
+    if (message.groupId) {
+      io.to(message.groupId.toString()).emit("messagePinned", message);
+    } else {
+      // For direct messages, use room ID
+      const directRoomId = `direct_${[req.user._id.toString(), message.receiverId.toString()].sort().join("_")}`;
+      io.to(directRoomId).emit("messagePinned", message);
+    }
+
+    return successResponse(res, { message });
+  } catch (error) {
+    return errorResponse(res, error.message, 500);
+  }
+};
+
+export const unpinMessage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const message = await Message.findById(id);
+    if (!message) return errorResponse(res, "Message not found", 404);
+
+    // Only the sender or group admin can unpin
+    if (message.senderId.toString() !== req.user._id.toString()) {
+      if (message.groupId) {
+        const group = await Group.findById(message.groupId);
+        if (!group || !group.admins.some((id) => id.equals(req.user._id))) {
+          return errorResponse(res, "Unauthorized", 403);
+        }
+      } else {
+        return errorResponse(res, "Unauthorized", 403);
+      }
+    }
+
+    message.pinned = false;
+    await message.save();
+
+    if (message.groupId) {
+      io.to(message.groupId.toString()).emit("messageUnpinned", message);
+    } else {
+      // For direct messages, use room ID
+      const directRoomId = `direct_${[req.user._id.toString(), message.receiverId.toString()].sort().join("_")}`;
+      io.to(directRoomId).emit("messageUnpinned", message);
+    }
+
     return successResponse(res, { message });
   } catch (error) {
     return errorResponse(res, error.message, 500);
@@ -184,10 +352,12 @@ export const searchMessages = async (req, res) => {
     const { q } = req.query;
     const keyword = q || "";
     const regex = new RegExp(keyword, "i");
+
     const messages = await Message.find({
-      $or: [{ text: regex }, { media: regex }],
+      text: regex,
       $or: [{ senderId: req.user._id }, { receiverId: req.user._id }],
     }).sort({ createdAt: -1 });
+
     return successResponse(res, { messages });
   } catch (error) {
     return errorResponse(res, error.message, 500);
@@ -198,11 +368,16 @@ export const getSharedMedia = async (req, res) => {
   try {
     const { id: userId } = req.params;
     const media = await Message.find({
-      $or: [{ senderId: req.user._id, receiverId: userId }, { senderId: userId, receiverId: req.user._id }],
+      $or: [
+        { senderId: req.user._id, receiverId: userId },
+        { senderId: userId, receiverId: req.user._id },
+      ],
       media: { $ne: "" },
     }).sort({ createdAt: -1 });
+
     return successResponse(res, { media });
   } catch (error) {
     return errorResponse(res, error.message, 500);
   }
 };
+
