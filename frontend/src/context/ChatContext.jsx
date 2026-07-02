@@ -41,17 +41,6 @@ export function ChatProvider({ children }) {
     activeChatRef.current = activeChatUser;
   }, [activeChatUser]);
 
-  /* ---------------- SOCKET INIT ---------------- */
-  useEffect(() => {
-    if (!user?._id) return;
-
-    const socket = connectSocket(user._id);
-
-    // return () => {
-    //   socket?.disconnect();
-    // };
-  }, [user?._id]);
-
   /* ---------------- SIDEBAR ---------------- */
   
 

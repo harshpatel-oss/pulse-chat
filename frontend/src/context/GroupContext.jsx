@@ -70,7 +70,7 @@ export function GroupProvider({ children }) {
 
     // Join first, so nothing that lands mid-fetch (or fires because the
     // socket only just connected) gets missed.
-    //emitJoinRoom(groupId, "group");
+    emitJoinRoom(groupId, "group");
 
     try {
       const [groupData, messagesData] = await Promise.all([
