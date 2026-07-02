@@ -91,26 +91,25 @@ export const getGroupMessages = async (req, res) => {
     const limit = Number(req.query.limit || 40);
     const skip = (page - 1) * limit;
 
-    // Check if user is a member of the group
     const group = await Group.findById(groupId);
     if (!group) return errorResponse(res, "Group not found", 404);
     if (!group.members.some((id) => id.equals(myId))) {
       return errorResponse(res, "You are not a member of this group", 403);
     }
 
-    // Fetch group messages with pagination
-    const messages = await Message.find({
+    let messages = await Message.find({
       groupId: groupId,
       deletedForEveryone: { $ne: true },
     })
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: -1 })   // newest first
       .skip(skip)
       .limit(limit)
       .populate("senderId", "fullName profilePic")
       .populate("replyTo", "text senderId media")
       .lean();
 
-    // Mark messages as seen
+    messages.reverse();   // display oldest -> newest within this latest page
+
     await Message.updateMany(
       { groupId: groupId, seenBy: { $ne: myId } },
       { $addToSet: { seenBy: myId, deliveredTo: myId } },
